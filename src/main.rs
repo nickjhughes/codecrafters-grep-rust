@@ -11,9 +11,15 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
         // Alphanumeric character class
         input_line.chars().any(|ch| ch.is_ascii_alphanumeric())
     } else if pattern.starts_with('[') && pattern.ends_with(']') {
-        // Positive character group
+        // Character group
         let chars = pattern.trim_start_matches('[').trim_end_matches(']');
-        chars.chars().any(|ch| input_line.contains(ch))
+        if chars.starts_with('^') {
+            // Negative
+            chars.chars().skip(1).all(|ch| !input_line.contains(ch))
+        } else {
+            // Positive
+            chars.chars().any(|ch| input_line.contains(ch))
+        }
     } else {
         panic!("unhandled pattern: {}", pattern)
     }
@@ -64,5 +70,11 @@ mod tests {
     fn positive_character_group() {
         assert!(match_pattern("apple", "[abc]"));
         assert!(!match_pattern("dog", "[abc]"));
+    }
+
+    #[test]
+    fn negative_character_group() {
+        assert!(match_pattern("dog", "[^abc]"));
+        assert!(!match_pattern("cab", "[^abc]"));
     }
 }

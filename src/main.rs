@@ -3,13 +3,17 @@ use std::{env, io, process};
 fn match_pattern(input_line: &str, pattern: &str) -> bool {
     if pattern.chars().count() == 1 {
         // Single character
-        return input_line.contains(pattern);
+        input_line.contains(pattern)
     } else if pattern == "\\d" {
         // Digit character class
         input_line.chars().any(|ch| ch.is_ascii_digit())
     } else if pattern == "\\w" {
         // Alphanumeric character class
         input_line.chars().any(|ch| ch.is_ascii_alphanumeric())
+    } else if pattern.starts_with('[') && pattern.ends_with(']') {
+        // Positive character group
+        let chars = pattern.trim_start_matches('[').trim_end_matches(']');
+        chars.chars().any(|ch| input_line.contains(ch))
     } else {
         panic!("unhandled pattern: {}", pattern)
     }
@@ -41,18 +45,24 @@ mod tests {
     #[test]
     fn single_character() {
         assert!(match_pattern("apple", "a"));
-        assert!(!match_pattern("foo", "a"));
+        assert!(!match_pattern("dog", "a"));
     }
 
     #[test]
     fn digit_character_class() {
-        assert!(match_pattern("apple123", "\\d"));
-        assert!(!match_pattern("foo", "\\d"));
+        assert!(match_pattern("3", "\\d"));
+        assert!(!match_pattern("c", "\\d"));
     }
 
     #[test]
     fn alphanumeric_character_class() {
         assert!(match_pattern("foo101", "\\w"));
         assert!(!match_pattern("$!?", "\\w"));
+    }
+
+    #[test]
+    fn positive_character_group() {
+        assert!(match_pattern("apple", "[abc]"));
+        assert!(!match_pattern("dog", "[abc]"));
     }
 }

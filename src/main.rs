@@ -1,19 +1,21 @@
-use std::env;
-use std::io;
-use std::process;
+use std::{env, io, process};
 
 fn match_pattern(input_line: &str, pattern: &str) -> bool {
     if pattern.chars().count() == 1 {
+        // Single character
         return input_line.contains(pattern);
+    } else if pattern == "\\d" {
+        // Digit character class
+        input_line.chars().any(|ch| ch.is_ascii_digit())
     } else {
-        panic!("Unhandled pattern: {}", pattern)
+        panic!("unhandled pattern: {}", pattern)
     }
 }
 
 // Usage: echo <input_text> | your_grep.sh -E <pattern>
 fn main() {
     if env::args().nth(1).unwrap() != "-E" {
-        println!("Expected first argument to be '-E'");
+        println!("expected first argument to be '-E'");
         process::exit(1);
     }
 
@@ -37,5 +39,11 @@ mod tests {
     fn single_character() {
         assert!(match_pattern("apple", "a"));
         assert!(!match_pattern("foo", "a"));
+    }
+
+    #[test]
+    fn digit_character_class() {
+        assert!(match_pattern("apple123", "\\d"));
+        assert!(!match_pattern("foo", "\\d"));
     }
 }

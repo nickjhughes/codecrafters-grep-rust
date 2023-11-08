@@ -7,6 +7,9 @@ fn match_pattern(input_line: &str, pattern: &str) -> bool {
     } else if pattern == "\\d" {
         // Digit character class
         input_line.chars().any(|ch| ch.is_ascii_digit())
+    } else if pattern == "\\w" {
+        // Alphanumeric character class
+        input_line.chars().any(|ch| ch.is_ascii_alphanumeric())
     } else {
         panic!("unhandled pattern: {}", pattern)
     }
@@ -45,5 +48,11 @@ mod tests {
     fn digit_character_class() {
         assert!(match_pattern("apple123", "\\d"));
         assert!(!match_pattern("foo", "\\d"));
+    }
+
+    #[test]
+    fn alphanumeric_character_class() {
+        assert!(match_pattern("foo101", "\\w"));
+        assert!(!match_pattern("$!?", "\\w"));
     }
 }

@@ -17,6 +17,7 @@ enum Pattern<'regex> {
     End,
     OneOrMore(Box<Pattern<'regex>>),
     ZeroOrOne(Box<Pattern<'regex>>),
+    Wildcard,
 }
 
 impl<'regex> Pattern<'regex> {
@@ -115,10 +116,15 @@ impl<'regex> Pattern<'regex> {
                 Some('^') => Ok((input.index(2..), Pattern::Character('^'))),
                 Some('+') => Ok((input.index(2..), Pattern::Character('+'))),
                 Some('?') => Ok((input.index(2..), Pattern::Character('?'))),
+                Some('.') => Ok((input.index(2..), Pattern::Character('.'))),
                 _ => {
                     anyhow::bail!("unhandled pattern")
                 }
             },
+            '.' => {
+                // Wildcard
+                Ok((input.index(1..), Pattern::Wildcard))
+            }
             ch => {
                 // Single character
                 if input.chars().nth(1) == Some('+') {
@@ -145,6 +151,7 @@ impl<'regex> Pattern<'regex> {
             Pattern::Alphanumeric => ch.is_ascii_alphanumeric(),
             Pattern::PositiveGroup(chars) => chars.contains(ch),
             Pattern::NegativeGroup(chars) => !chars.contains(ch),
+            Pattern::Wildcard => true,
             _ => unreachable!(),
         }
     }
@@ -387,9 +394,15 @@ mod tests {
 
     #[test]
     fn zero_or_one() {
-        // assert!(match_pattern("dogs", "dogs?").unwrap());
-        // assert!(match_pattern("dog", "dogs?").unwrap());
-        // assert!(!match_pattern("cat", "dogs?").unwrap());
+        assert!(match_pattern("dogs", "dogs?").unwrap());
+        assert!(match_pattern("dog", "dogs?").unwrap());
+        assert!(!match_pattern("cat", "dogs?").unwrap());
         assert!(!match_pattern("cag", "ca?t").unwrap());
+    }
+
+    #[test]
+    fn wildcard() {
+        assert!(match_pattern("dog", "d.g").unwrap());
+        assert!(!match_pattern("cog", "d.g").unwrap());
     }
 }

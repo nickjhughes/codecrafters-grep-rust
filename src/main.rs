@@ -18,6 +18,7 @@ enum Pattern<'regex> {
     OneOrMore(Box<Pattern<'regex>>),
     ZeroOrOne(Box<Pattern<'regex>>),
     Wildcard,
+    Alternation(Vec<Vec<Pattern<'regex>>>),
 }
 
 impl<'regex> Pattern<'regex> {
@@ -30,6 +31,47 @@ impl<'regex> Pattern<'regex> {
             '$' => {
                 // End of string anchor
                 Ok((input.index(1..), Pattern::End))
+            }
+            '(' => {
+                // Alternation group
+                let mut current_pos = 0;
+                let mut start_of_current_alternative = 1;
+                let mut alternatives = Vec::new();
+                let mut chars = input.chars();
+                loop {
+                    match chars.next() {
+                        Some(ch) => match ch {
+                            '|' => {
+                                alternatives.push(
+                                    Regex::parse(
+                                        input.index(start_of_current_alternative..current_pos),
+                                    )?
+                                    .patterns,
+                                );
+                                current_pos += 1;
+                                start_of_current_alternative = current_pos;
+                            }
+                            ')' => {
+                                alternatives.push(
+                                    Regex::parse(
+                                        input.index(start_of_current_alternative..current_pos),
+                                    )?
+                                    .patterns,
+                                );
+                                break;
+                            }
+                            _ => {
+                                current_pos += 1;
+                            }
+                        },
+                        None => anyhow::bail!("premature end of alternation group"),
+                    }
+                }
+
+                Ok((
+                    input.index(current_pos + 1..),
+                    Pattern::Alternation(alternatives),
+                ))
             }
             '[' => {
                 // Character group
@@ -69,9 +111,9 @@ impl<'regex> Pattern<'regex> {
                     )
                 };
 
-                if rest.chars().next() == Some('+') {
+                if rest.starts_with('+') {
                     Ok((rest.index(1..), Pattern::OneOrMore(Box::new(inner_pattern))))
-                } else if rest.chars().next() == Some('?') {
+                } else if rest.starts_with('?') {
                     Ok((rest.index(1..), Pattern::ZeroOrOne(Box::new(inner_pattern))))
                 } else {
                     Ok((rest, inner_pattern))
@@ -180,21 +222,17 @@ impl<'regex> Regex<'regex> {
             anyhow::bail!("non-ascii character in pattern {}", input);
         }
 
-        // dbg!(&self);
-
-        Ok(self.match_(input, 0))
+        Ok(self.match_(input, &self.patterns[..]))
     }
 
-    fn match_(&self, input: &str, pattern_index: usize) -> bool {
-        // eprintln!("match_({:?}, {})", input, pattern_index);
-
-        if self.patterns.get(pattern_index) == Some(&Pattern::Start) {
-            return self.match_here(input, pattern_index + 1);
+    fn match_(&self, input: &str, patterns: &[Pattern]) -> bool {
+        if patterns.get(0) == Some(&Pattern::Start) {
+            return self.match_here(input, &patterns[1..]);
         }
 
         let mut input = input;
         loop {
-            if self.match_here(input, pattern_index) {
+            if self.match_here(input, patterns) {
                 return true;
             }
             input = &input[1..];
@@ -205,26 +243,27 @@ impl<'regex> Regex<'regex> {
         false
     }
 
-    fn match_here(&self, input: &str, pattern_index: usize) -> bool {
-        // eprintln!("match_here({:?}, {})", input, pattern_index);
-
-        match self.patterns.get(pattern_index) {
+    fn match_here(&self, input: &str, patterns: &[Pattern]) -> bool {
+        match patterns.get(0) {
             None => true,
             Some(pattern) => match pattern {
                 Pattern::OneOrMore(inner_pattern) => {
-                    self.match_one_or_more(input, inner_pattern, pattern_index + 1)
+                    self.match_one_or_more(input, inner_pattern, &patterns[1..])
                 }
                 Pattern::ZeroOrOne(inner_pattern) => {
-                    self.match_zero_or_one(input, inner_pattern, pattern_index + 1)
+                    self.match_zero_or_one(input, inner_pattern, &patterns[1..])
                 }
-                Pattern::End if self.patterns.get(pattern_index + 1).is_none() => input.is_empty(),
-                Pattern::Character(ch) if input.chars().next() == Some(*ch) => {
-                    self.match_here(&input[1..], pattern_index + 1)
+                Pattern::Alternation(alternatives) => {
+                    self.match_alternatives(input, alternatives, &patterns[1..])
+                }
+                Pattern::End if patterns.get(1).is_none() => input.is_empty(),
+                Pattern::Character(ch) if input.starts_with(*ch) => {
+                    self.match_here(&input[1..], &patterns[1..])
                 }
                 pattern => {
                     if let Some(ch) = input.chars().next() {
                         if pattern.matches(ch) {
-                            self.match_here(&input[1..], pattern_index + 1)
+                            self.match_here(&input[1..], &patterns[1..])
                         } else {
                             false
                         }
@@ -240,17 +279,12 @@ impl<'regex> Regex<'regex> {
         &self,
         input: &str,
         inner_pattern: &Pattern,
-        next_pattern_index: usize,
+        next_patterns: &[Pattern],
     ) -> bool {
-        // eprintln!(
-        //     "match_one_or_more({:?}, {:?}, {})",
-        //     input, &inner_pattern, next_pattern_index
-        // );
-
         let mut input = input;
         while !input.is_empty() && inner_pattern.matches(input.chars().next().unwrap()) {
             input = &input[1..];
-            if self.match_here(input, next_pattern_index) {
+            if self.match_here(input, next_patterns) {
                 return true;
             }
         }
@@ -261,21 +295,33 @@ impl<'regex> Regex<'regex> {
         &self,
         input: &str,
         inner_pattern: &Pattern,
-        next_pattern_index: usize,
+        next_patterns: &[Pattern],
     ) -> bool {
-        // eprintln!(
-        //     "match_zero_or_one({:?}, {:?}, {})",
-        //     input, &inner_pattern, next_pattern_index
-        // );
-
-        if self.match_here(input, next_pattern_index) {
+        if self.match_here(input, next_patterns) {
             return true;
         }
         if !input.is_empty() && inner_pattern.matches(input.chars().next().unwrap()) {
-            self.match_here(&input[1..], next_pattern_index)
+            self.match_here(&input[1..], next_patterns)
         } else {
             false
         }
+    }
+
+    fn match_alternatives(
+        &self,
+        input: &str,
+        alternatives: &[Vec<Pattern>],
+        next_patterns: &[Pattern],
+    ) -> bool {
+        for alternative in alternatives {
+            let mut alternative_patterns = Vec::new();
+            alternative_patterns.extend(alternative.iter().cloned());
+            alternative_patterns.extend(next_patterns.iter().cloned());
+            if self.match_here(input, &alternative_patterns) {
+                return true;
+            }
+        }
+        false
     }
 }
 
@@ -309,7 +355,7 @@ mod tests {
 
     #[test]
     fn parse() {
-        let regex = Regex::parse("^[^abc]\\w?f+oo\\d+[bar]+$").unwrap();
+        let regex = Regex::parse("^[^abc]\\w?f+oo\\d+[bar]+(ca|d)$").unwrap();
         assert_eq!(
             regex,
             Regex {
@@ -322,6 +368,10 @@ mod tests {
                     Pattern::Character('o'),
                     Pattern::OneOrMore(Box::new(Pattern::Digit)),
                     Pattern::OneOrMore(Box::new(Pattern::PositiveGroup("bar"))),
+                    Pattern::Alternation(vec![
+                        vec![Pattern::Character('c'), Pattern::Character('a')],
+                        vec![Pattern::Character('d')],
+                    ]),
                     Pattern::End
                 ]
             }
@@ -404,5 +454,13 @@ mod tests {
     fn wildcard() {
         assert!(match_pattern("dog", "d.g").unwrap());
         assert!(!match_pattern("cog", "d.g").unwrap());
+    }
+
+    #[test]
+    fn alternation() {
+        assert!(match_pattern("dog", "(cat|dog)").unwrap());
+        assert!(match_pattern("cat", "(cat|dog)").unwrap());
+        assert!(!match_pattern("apple", "(cat|dog)").unwrap());
+        assert!(!match_pattern("cow", "(cat|dog)").unwrap());
     }
 }

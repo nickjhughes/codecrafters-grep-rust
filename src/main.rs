@@ -1,12 +1,12 @@
 use anyhow::Result;
 use std::{env, io, ops::Index, process};
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 struct Regex<'regex> {
     patterns: Vec<Pattern<'regex>>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, PartialEq)]
 enum Pattern<'regex> {
     Character(char),
     Digit,
@@ -16,6 +16,7 @@ enum Pattern<'regex> {
     Start,
     End,
     OneOrMore(Box<Pattern<'regex>>),
+    ZeroOrOne(Box<Pattern<'regex>>),
 }
 
 impl<'regex> Pattern<'regex> {
@@ -55,31 +56,65 @@ impl<'regex> Pattern<'regex> {
                     }
                 }
 
-                if is_negative {
-                    Ok((
+                let (rest, inner_pattern) = if is_negative {
+                    (
                         rest.index(i + 1..),
                         Pattern::NegativeGroup(rest.index(0..i)),
-                    ))
+                    )
                 } else {
-                    Ok((
+                    (
                         rest.index(i + 1..),
                         Pattern::PositiveGroup(rest.index(0..i)),
-                    ))
+                    )
+                };
+
+                if rest.chars().next() == Some('+') {
+                    Ok((rest.index(1..), Pattern::OneOrMore(Box::new(inner_pattern))))
+                } else if rest.chars().next() == Some('?') {
+                    Ok((rest.index(1..), Pattern::ZeroOrOne(Box::new(inner_pattern))))
+                } else {
+                    Ok((rest, inner_pattern))
                 }
             }
             '\\' => match input.chars().nth(1) {
                 Some('d') => {
                     // Digit character class
-                    Ok((input.index(2..), Pattern::Digit))
+                    if input.chars().nth(2) == Some('+') {
+                        Ok((
+                            input.index(3..),
+                            Pattern::OneOrMore(Box::new(Pattern::Digit)),
+                        ))
+                    } else if input.chars().nth(2) == Some('?') {
+                        Ok((
+                            input.index(3..),
+                            Pattern::ZeroOrOne(Box::new(Pattern::Digit)),
+                        ))
+                    } else {
+                        Ok((input.index(2..), Pattern::Digit))
+                    }
+                    // Ok((input.index(2..), Pattern::Digit))
                 }
                 Some('w') => {
                     // Alphanumeric character class
-                    Ok((input.index(2..), Pattern::Alphanumeric))
+                    if input.chars().nth(2) == Some('+') {
+                        Ok((
+                            input.index(3..),
+                            Pattern::OneOrMore(Box::new(Pattern::Alphanumeric)),
+                        ))
+                    } else if input.chars().nth(2) == Some('?') {
+                        Ok((
+                            input.index(3..),
+                            Pattern::ZeroOrOne(Box::new(Pattern::Alphanumeric)),
+                        ))
+                    } else {
+                        Ok((input.index(2..), Pattern::Alphanumeric))
+                    }
                 }
                 Some('\\') => Ok((input.index(2..), Pattern::Character('\\'))),
                 Some('$') => Ok((input.index(2..), Pattern::Character('$'))),
                 Some('^') => Ok((input.index(2..), Pattern::Character('^'))),
                 Some('+') => Ok((input.index(2..), Pattern::Character('+'))),
+                Some('?') => Ok((input.index(2..), Pattern::Character('?'))),
                 _ => {
                     anyhow::bail!("unhandled pattern")
                 }
@@ -90,6 +125,11 @@ impl<'regex> Pattern<'regex> {
                     Ok((
                         input.index(2..),
                         Pattern::OneOrMore(Box::new(Pattern::Character(ch))),
+                    ))
+                } else if input.chars().nth(1) == Some('?') {
+                    Ok((
+                        input.index(2..),
+                        Pattern::ZeroOrOne(Box::new(Pattern::Character(ch))),
                     ))
                 } else {
                     Ok((input.index(1..), Pattern::Character(ch)))
@@ -241,7 +281,28 @@ fn main() -> Result<()> {
 
 #[cfg(test)]
 mod tests {
-    use super::match_pattern;
+    use super::{match_pattern, Pattern, Regex};
+
+    #[test]
+    fn parse() {
+        let regex = Regex::parse("^[^abc]\\w?f+oo\\d+[bar]+$").unwrap();
+        assert_eq!(
+            regex,
+            Regex {
+                patterns: vec![
+                    Pattern::Start,
+                    Pattern::NegativeGroup("abc"),
+                    Pattern::ZeroOrOne(Box::new(Pattern::Alphanumeric)),
+                    Pattern::OneOrMore(Box::new(Pattern::Character('f'))),
+                    Pattern::Character('o'),
+                    Pattern::Character('o'),
+                    Pattern::OneOrMore(Box::new(Pattern::Digit)),
+                    Pattern::OneOrMore(Box::new(Pattern::PositiveGroup("bar"))),
+                    Pattern::End
+                ]
+            }
+        )
+    }
 
     #[test]
     fn single_character() {
@@ -305,5 +366,12 @@ mod tests {
         assert!(match_pattern("apple", "a+").unwrap());
         assert!(match_pattern("SaaS", "a+").unwrap());
         assert!(!match_pattern("dog", "a+").unwrap());
+    }
+
+    #[test]
+    fn zero_or_one() {
+        assert!(match_pattern("dogs", "dogs?").unwrap());
+        assert!(match_pattern("dog", "dogs?").unwrap());
+        assert!(!match_pattern("cat", "dogs?").unwrap());
     }
 }

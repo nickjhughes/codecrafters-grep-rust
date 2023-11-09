@@ -13,11 +13,21 @@ enum Pattern<'regex> {
     Alphanumeric,
     PositiveGroup(&'regex str),
     NegativeGroup(&'regex str),
+    Start,
+    End,
 }
 
 impl<'regex> Pattern<'regex> {
     fn parse(input: &'regex str) -> Result<(&'regex str, Self)> {
         match input.chars().next().unwrap() {
+            '^' => {
+                // Start of string anchor
+                Ok((input.index(1..), Pattern::Start))
+            }
+            '$' => {
+                // End of string anchor
+                Ok((input.index(1..), Pattern::End))
+            }
             '[' => {
                 // Character group
                 let (rest, is_negative) = if input.chars().nth(1) == Some('^') {
@@ -87,6 +97,15 @@ impl<'regex> Pattern<'regex> {
             Pattern::Alphanumeric => ch.is_ascii_alphanumeric(),
             Pattern::PositiveGroup(chars) => chars.contains(ch),
             Pattern::NegativeGroup(chars) => !chars.contains(ch),
+            Pattern::End => false,
+            _ => unreachable!(),
+        }
+    }
+
+    fn must_match(&self) -> bool {
+        match self {
+            Pattern::End => true,
+            _ => false,
         }
     }
 }
@@ -120,6 +139,14 @@ impl<'regex> Regex<'regex> {
 
         let mut patterns = self.patterns.iter();
         let mut pattern = patterns.next().unwrap();
+
+        let mut next_must_match = if matches!(pattern, Pattern::Start) {
+            pattern = patterns.next().unwrap();
+            true
+        } else {
+            false
+        };
+
         for in_ch in input.chars() {
             if pattern.matches(in_ch) {
                 // Move onto next pattern
@@ -130,10 +157,17 @@ impl<'regex> Regex<'regex> {
                         return Ok(true);
                     }
                 };
+                next_must_match = false;
+            } else if next_must_match || pattern.must_match() {
+                return Ok(false);
             }
         }
-        // Ran out of input before matching all paterns, so overall input doesn't match
-        Ok(false)
+        if matches!(pattern, Pattern::End) {
+            Ok(true)
+        } else {
+            // Ran out of input before matching all paterns, so overall input doesn't match
+            Ok(false)
+        }
     }
 }
 
@@ -208,5 +242,17 @@ mod tests {
         assert!(!match_pattern("1 dog", "\\d \\w\\w\\ws").unwrap());
 
         assert!(!match_pattern("sally has 12 apples", "\\d\\\\d\\\\d apples").unwrap());
+    }
+
+    #[test]
+    fn start_anchor() {
+        assert!(match_pattern("log", "^log").unwrap());
+        assert!(!match_pattern("slog", "^log").unwrap());
+    }
+
+    #[test]
+    fn end_anchor() {
+        assert!(match_pattern("dog", "dog$").unwrap());
+        assert!(!match_pattern("dogs", "dog$").unwrap());
     }
 }

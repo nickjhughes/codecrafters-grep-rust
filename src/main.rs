@@ -15,6 +15,7 @@ enum Pattern<'regex> {
     NegativeGroup(&'regex str),
     Start,
     End,
+    OneOrMore(Box<Pattern<'regex>>),
 }
 
 impl<'regex> Pattern<'regex> {
@@ -75,17 +76,24 @@ impl<'regex> Pattern<'regex> {
                     // Alphanumeric character class
                     Ok((input.index(2..), Pattern::Alphanumeric))
                 }
-                Some('\\') => {
-                    // Literal backslash
-                    Ok((input.index(2..), Pattern::Character('\\')))
-                }
+                Some('\\') => Ok((input.index(2..), Pattern::Character('\\'))),
+                Some('$') => Ok((input.index(2..), Pattern::Character('$'))),
+                Some('^') => Ok((input.index(2..), Pattern::Character('^'))),
+                Some('+') => Ok((input.index(2..), Pattern::Character('+'))),
                 _ => {
                     anyhow::bail!("unhandled pattern")
                 }
             },
             ch => {
                 // Single character
-                Ok((input.index(1..), Pattern::Character(ch)))
+                if input.chars().nth(1) == Some('+') {
+                    Ok((
+                        input.index(2..),
+                        Pattern::OneOrMore(Box::new(Pattern::Character(ch))),
+                    ))
+                } else {
+                    Ok((input.index(1..), Pattern::Character(ch)))
+                }
             }
         }
     }
@@ -103,10 +111,7 @@ impl<'regex> Pattern<'regex> {
     }
 
     fn must_match(&self) -> bool {
-        match self {
-            Pattern::End => true,
-            _ => false,
-        }
+        matches!(self, Pattern::End)
     }
 }
 
@@ -147,19 +152,58 @@ impl<'regex> Regex<'regex> {
             false
         };
 
-        for in_ch in input.chars() {
-            if pattern.matches(in_ch) {
-                // Move onto next pattern
-                pattern = match patterns.next() {
-                    Some(pattern) => pattern,
-                    None => {
-                        // All patterns matched, so overall input matched
-                        return Ok(true);
+        let mut input_chars = input.chars().peekable();
+        while let Some(in_ch) = input_chars.next() {
+            match pattern {
+                Pattern::OneOrMore(inner_pattern) => {
+                    if !inner_pattern.matches(in_ch) {
+                        if next_must_match {
+                            return Ok(false);
+                        } else {
+                            // Keep going until we find a match
+                            loop {
+                                if let Some(in_ch) = input_chars.next() {
+                                    if inner_pattern.matches(in_ch) {
+                                        break;
+                                    }
+                                } else {
+                                    // Ran out of input before finding a match
+                                    return Ok(false);
+                                }
+                            }
+                        }
                     }
-                };
-                next_must_match = false;
-            } else if next_must_match || pattern.must_match() {
-                return Ok(false);
+
+                    while let Some(in_ch) = input_chars.peek() {
+                        if !inner_pattern.matches(*in_ch) {
+                            pattern = match patterns.next() {
+                                Some(pattern) => pattern,
+                                None => {
+                                    // All patterns matched, so overall input matched
+                                    return Ok(true);
+                                }
+                            };
+                            break;
+                        } else {
+                            input_chars.next();
+                        }
+                    }
+                }
+                _ => {
+                    if pattern.matches(in_ch) {
+                        // Move onto next pattern
+                        pattern = match patterns.next() {
+                            Some(pattern) => pattern,
+                            None => {
+                                // All patterns matched, so overall input matched
+                                return Ok(true);
+                            }
+                        };
+                        next_must_match = false;
+                    } else if next_must_match || pattern.must_match() {
+                        return Ok(false);
+                    }
+                }
             }
         }
         if matches!(pattern, Pattern::End) {
@@ -254,5 +298,12 @@ mod tests {
     fn end_anchor() {
         assert!(match_pattern("dog", "dog$").unwrap());
         assert!(!match_pattern("dogs", "dog$").unwrap());
+    }
+
+    #[test]
+    fn one_or_more() {
+        assert!(match_pattern("apple", "a+").unwrap());
+        assert!(match_pattern("SaaS", "a+").unwrap());
+        assert!(!match_pattern("dog", "a+").unwrap());
     }
 }
